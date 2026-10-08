@@ -112,7 +112,9 @@ class _StudentScanScreenState extends ConsumerState<StudentScanScreen> {
                         errorBuilder: (context, error) => Center(
                           child: SignNotice(
                             title: 'Camera unavailable',
-                            body: 'Allow camera access for this app, or paste the boarding code below.',
+                            body: kDebugMode
+                                ? 'Allow camera access for this app, or paste the boarding code below.'
+                                : "Allow camera access for this app to scan the driver's QR code.",
                             edge: TransitColors.caution,
                           ),
                         ),
