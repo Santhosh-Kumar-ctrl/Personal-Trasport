@@ -234,6 +234,8 @@ def _words(text: str) -> set[str]:
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
+    if len(a) != len(b):
+        return 0.0
     dot = sum(x * y for x, y in zip(a, b))
     na, nb = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0
@@ -251,7 +253,7 @@ async def lost_item_candidates(session: AsyncSession, report: Report, trip: Trip
     report_words = _words(report.description)
     scored = []
     for item in items:
-        if report_vec and item.embedding:
+        if report_vec and item.embedding and len(report_vec) == len(item.embedding):
             score = _cosine(report_vec, item.embedding)
             ok = score >= EMBED_MIN
         else:

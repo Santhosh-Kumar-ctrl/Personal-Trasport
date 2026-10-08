@@ -54,7 +54,7 @@ class FoundItem(Base, TimestampMixin):
     status: Mapped[FoundItemStatus] = mapped_column(
         str_enum(FoundItemStatus, "found_item_status"), default=FoundItemStatus.UNCLAIMED, index=True
     )
-    # Text embedding of the description (Ollama), for matching lost-item reports. Null when the
+    # Text embedding of the description (NIM), for matching lost-item reports. Null when the
     # model was unavailable; matching then falls back to word overlap.
     embedding: Mapped[list[float] | None] = mapped_column(ARRAY(Float))
 

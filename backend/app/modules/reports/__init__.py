@@ -3,13 +3,14 @@
 import asyncio
 
 from fastapi import FastAPI
+from sqlalchemy import select
 
 from app.core import events, tasks
 from app.core.db import SessionLocal
 from app.core.realtime import hub
 from app.core.roles import Role
 from app.modules.reports import agent, llm, service
-from app.modules.reports.models import FoundItem
+from app.modules.reports.models import AnalysisStatus, FoundItem, Report
 from app.modules.reports.router import router
 
 # One analysis at a time: the local model shares one GPU, and each run holds a DB session.
@@ -22,6 +23,16 @@ async def _analyse(report_id: int) -> None:
     _in_flight.add(report_id)
     try:
         async with _analysis_slot, SessionLocal() as session:
+            # Claim the report in the database so overlapping tasks (e.g. during an ECS deploy)
+            # never analyse it twice: the row lock is held until commit, and a task that finds the
+            # report locked or already analysed skips it.
+            claimed = await session.scalar(
+                select(Report.id)
+                .where(Report.id == report_id, Report.analysis_status == AnalysisStatus.PENDING)
+                .with_for_update(skip_locked=True)
+            )
+            if claimed is None:
+                return
             await agent.analyse(session, report_id)
             await session.commit()
     finally:

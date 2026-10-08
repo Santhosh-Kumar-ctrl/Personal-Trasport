@@ -15,7 +15,7 @@
   item, something else), which of their recent trips, their own words, and optionally their name
   hidden from staff.
 - The **agent** analyses every report in the background (it never slows the student's request):
-  1. **Read:** a local model (Ollama, `qwen3:4b`) pulls out the claim: subtype, minutes late,
+  1. **Read:** a model (hosted NVIDIA NIM when `REPORT_AI=nim`, otherwise keyword rules only) pulls out the claim: subtype, minutes late,
      the stop mentioned, and any extra checks worth running. Keyword rules run as well and win
      for phrases they can't misread ("drove past", "never came", "touching", "accident").
   2. **Evidence (code only):** each check reads the system's own records and gives a verdict:
@@ -42,12 +42,12 @@ It does **not** decide anything about a person. Conduct reports get a `conduct: 
 | `crowding` | `capacity.trip_occupancy` | boarded ≥ capacity (partly at ≥ `CAPACITY_WARN_PCT`) |
 | `speed` | `bus_positions` (read-only) | 2+ GPS readings over `REPORT_SPEED_LIMIT_KMPH` (60) |
 | `conduct` | none | always `no_data`: staff follow-up |
-| `lost_item` | `found_items` on the same trip or bus, last `REPORT_LOOKBACK_DAYS` | candidates ranked by embedding similarity (`nomic-embed-text`), or word overlap when the model is off |
+| `lost_item` | `found_items` on the same trip or bus, last `REPORT_LOOKBACK_DAYS` | candidates ranked by embedding similarity (NIM embedding model), or word overlap when the model is off |
 
 ### When the model isn't there
-Ollama not running, a timeout, or output that doesn't fit the schema: that step falls back to
-keyword rules and templates. `analysed_by` says `rules`, or `qwen3:4b+rules` when only one step
-used the model. The model's output is capped (`num_predict`) so a runaway answer fails fast.
+NIM unreachable or not configured, a timeout, or output that doesn't fit the schema: that step falls back to
+keyword rules and templates. `analysed_by` says `rules`, or `<model>+rules` when only one step
+used the model. The model's output is capped (`max_tokens`) so a runaway answer fails fast. A reply with no text content also falls back to the rules.
 
 ### Numbers in the draft are checked
 Every number and time in the model's summary, suggested action and draft reply must appear in
@@ -125,14 +125,23 @@ doesn't use the dashboard's forwarding, which also reaches students on the route
 ## Public service API (for other modules)
 `get_report(session, id)`, `recipient_id(session, report_id)` (who to notify; used by notifications).
 
+## Data sent to NIM
+The default is `REPORT_AI=rules`: nothing leaves the deployment. With `REPORT_AI=nim` the full
+report text, as the student wrote it, is sent to the endpoint in `NIM_BASE_URL` (NVIDIA's hosted
+API by default) for the read and write steps, and the description of every logged found item is
+sent for embedding. Marking a report anonymous hides the name from staff only; it does not redact
+the text. Turn NIM on only if students are told their report text is processed by NVIDIA, or point
+`NIM_BASE_URL` at a NIM you host yourself.
+
 ## Settings
 | Env var | Default | |
 |---|---|---|
-| `REPORT_AI` | `ollama` | `rules` skips the model |
-| `OLLAMA_URL` | `http://localhost:11434` | |
-| `OLLAMA_MODEL` | `qwen3:4b` | any Ollama chat model that supports structured output |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | lost-and-found matching |
-| `OLLAMA_TIMEOUT_SECONDS` | `120` | the first call after a while also loads the model |
+| `REPORT_AI` | `rules` | `rules` keeps everything local. `nim` sends report text to the NIM endpoint (see Data sent to NIM); if NIM is unreachable it falls back to rules |
+| `NIM_API_KEY` | _(empty)_ | required when `REPORT_AI=nim`; injected from AWS Secrets Manager |
+| `NIM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | |
+| `NIM_MODEL` | `meta/llama-3.1-70b-instruct` | |
+| `NIM_EMBED_MODEL` | `nvidia/llama-3.2-nv-embedqa-1b-v2` | lost-and-found matching; found items embedded with another model are matched by word overlap |
+| `NIM_TIMEOUT_SECONDS` | `30` | |
 | `REPORT_SPEED_LIMIT_KMPH` | `60` | |
 | `REPORT_LOOKBACK_DAYS` | `3` | |
 
@@ -147,8 +156,8 @@ doesn't use the dashboard's forwarding, which also reaches students on the route
 
 ## How to test
 ```bash
-cd backend && .venv/Scripts/python -m pytest app/modules/reports -q   # rules mode + a fake Ollama
-python -m scripts.simulate_reports                                     # real model, API running
+cd backend && .venv/Scripts/python -m pytest app/modules/reports -q   # rules mode + a fake NIM
+python -m scripts.simulate_reports                                     # NIM mode needs REPORT_AI=nim and NIM_API_KEY, API running
 ```
 `simulate_reports` builds a trip with known facts (12 min late at stop 2, stop 3 skipped, GPS at
 85 km/h, a water bottle found), files six reports and checks every verdict.
@@ -156,5 +165,5 @@ python -m scripts.simulate_reports                                     # real mo
 ## Extension notes
 - **Clustering and patterns** (next step): group open reports by route, kind and day; a weekly
   job can summarise recurring problems from `reports` + `delay_reports` + attendance.
-- **Photos:** add an upload endpoint and a vision model (e.g. `qwen2.5vl:3b`, already installed).
-- **Tamil:** switch `OLLAMA_MODEL` to a larger model and add the language to the write prompt.
+- **Photos:** add an upload endpoint and a vision model (for example a NIM vision model).
+- **Tamil:** switch `NIM_MODEL` to a multilingual model and add the language to the write prompt.

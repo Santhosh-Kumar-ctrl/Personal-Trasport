@@ -225,8 +225,8 @@ async def test_admin_list_pins_critical_open_reports(world):
 
 
 # ---------------- The model client ----------------
-def _ollama(reply_for):
-    """A fake Ollama server. `reply_for(path, body)` returns the response JSON (or raises)."""
+def _nim(reply_for):
+    """A fake NIM server. `reply_for(path, body)` returns the response JSON (or raises)."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=reply_for(request.url.path, json.loads(request.content)))
@@ -235,31 +235,40 @@ def _ollama(reply_for):
 
 
 def _chat(content) -> dict:
-    return {"message": {"role": "assistant", "content": content if isinstance(content, str) else json.dumps(content)}}
+    """OpenAI-compatible chat response envelope."""
+    text = content if isinstance(content, str) else json.dumps(content)
+    return {"choices": [{"message": {"role": "assistant", "content": text}}]}
+
+
+def _embed(vector: list) -> dict:
+    """OpenAI-compatible embeddings response envelope."""
+    return {"data": [{"embedding": vector}]}
 
 
 @pytest.fixture
 def model_on(monkeypatch):
-    monkeypatch.setattr(settings, "report_ai", "ollama")
+    monkeypatch.setattr(settings, "report_ai", "nim")
+    monkeypatch.setattr(settings, "nim_api_key", "test-key")
+    monkeypatch.setattr(settings, "nim_base_url", "https://nim.test/v1")
     yield lambda transport: monkeypatch.setattr(llm, "transport", transport)
 
 
 async def test_model_reads_and_writes_but_rules_keep_the_severity_floor(world, model_on):
     def reply_for(path, body):
-        if path == "/api/embed":
-            return {"embeddings": [[0.1, 0.2, 0.3]]}
+        if path.endswith("/embeddings"):
+            return _embed([0.1, 0.2, 0.3])
         if "FINDINGS" in body["messages"][1]["content"]:
             return _chat({"summary": "Student reports speeding; GPS confirms.", "suggested_action": "Review speeds.",
                           "draft_reply": "Thanks for telling us. We're looking into it."})
         return _chat({"subtype": "speeding", "claimed_delay_min": None, "mentioned_stop": None,
                       "extra_checks": ["crowding"], "severity_hint": "low"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "safety", "driver was rash", w["trip"]["id"])
-    assert r["analysed_by"] == settings.ollama_model
-    assert r["analysis"]["steps"] == {"read": settings.ollama_model, "write": settings.ollama_model}
+    assert r["analysed_by"] == settings.nim_model
+    assert r["analysis"]["steps"] == {"read": settings.nim_model, "write": settings.nim_model}
     assert r["analysis"]["summary"] == "Student reports speeding; GPS confirms."
     assert {f["check"] for f in r["analysis"]["findings"]} >= {"speed", "crowding"}  # model added crowding
     assert r["severity"] == "critical"  # model said low; safety reports can't go below critical
@@ -272,7 +281,7 @@ async def test_rules_correct_a_model_that_misses_a_skipped_stop(world, model_on)
         return _chat({"subtype": "late", "claimed_delay_min": 0, "mentioned_stop": "",
                       "extra_checks": [], "severity_hint": "normal"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=4)
     student = await _rider(world, w, stop_index=1, board=False)
     await world.post(f"/trips/{w['trip']['id']}/stops/3/arrive", who=w["driver"])
@@ -291,7 +300,7 @@ async def test_model_cannot_make_an_ordinary_report_critical(world, model_on):
         return _chat({"subtype": "late", "claimed_delay_min": 45, "mentioned_stop": None,
                       "extra_checks": [], "severity_hint": "critical"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "lateness", "Bus came 45 minutes late, I missed my class!", w["trip"]["id"])
@@ -306,19 +315,19 @@ async def test_draft_with_a_garbled_number_is_replaced_by_the_rules_draft(world,
         return _chat({"subtype": "speeding", "claimed_delay_min": None, "mentioned_stop": None,
                       "extra_checks": [], "severity_hint": "high"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     fixes = [{"latitude": 12.9 + i * 0.01, "longitude": 80.2, "speed_kmph": s} for i, s in enumerate([82, 88])]
     await world.post(f"/trips/{w['trip']['id']}/positions", {"positions": fixes}, who=w["driver"])
     r = await _report(world, student, "safety", "driver was too fast", w["trip"]["id"])
-    assert r["analysis"]["steps"] == {"read": settings.ollama_model, "write": "rules"}
-    assert r["analysed_by"] == f"{settings.ollama_model}+rules"
+    assert r["analysis"]["steps"] == {"read": settings.nim_model, "write": "rules"}
+    assert r["analysed_by"] == f"{settings.nim_model}+rules"
     assert "6:00" not in r["analysis"]["draft_reply"] and "88 km/h" in r["analysis"]["draft_reply"]
 
 
 async def test_bad_model_output_falls_back_to_rules(world, model_on):
-    model_on(_ollama(lambda path, body: _chat("sorry, I can't do JSON")))
+    model_on(_nim(lambda path, body: _chat("sorry, I can't do JSON")))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "lateness", "bus 15 min late", w["trip"]["id"])
@@ -329,7 +338,7 @@ async def test_model_unreachable_falls_back_to_rules(world, model_on):
     def down(path, body):
         raise httpx.ConnectError("connection refused")
 
-    model_on(_ollama(down))
+    model_on(_nim(down))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "overcrowding", "full bus", w["trip"]["id"])
@@ -407,8 +416,8 @@ def test_real_emergencies_are_critical(text):
 
 async def test_model_drafts_that_promise_or_blame_fall_back_to_the_template(world, model_on):
     def reply_for(path, body):
-        if path == "/api/embed":
-            return {"embeddings": [[0.1, 0.2, 0.3]]}
+        if path.endswith("/embeddings"):
+            return _embed([0.1, 0.2, 0.3])
         if "FINDINGS" in body["messages"][1]["content"]:
             return _chat({"summary": "Late bus.", "suggested_action": "Check timings.",
                           "draft_reply": "Sorry! The driver was late, which is why you missed class. "
@@ -416,7 +425,7 @@ async def test_model_drafts_that_promise_or_blame_fall_back_to_the_template(worl
         return _chat({"subtype": "late", "claimed_delay_min": None, "mentioned_stop": None,
                       "extra_checks": [], "severity_hint": "normal"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "lateness", "bus was late", w["trip"]["id"])
@@ -445,3 +454,130 @@ async def test_students_cant_flood_reports(world):
         await world.post("/reports", {"kind": "other", "description": "bus smells bad"}, who=student, expect=201)
     r = await world.post("/reports", {"kind": "other", "description": "bus smells bad"}, who=student, expect=429)
     assert r.json()["code"] == "rate_limited"
+
+
+# ---------------- NIM integration: JSON extraction ----------------
+@pytest.mark.parametrize("raw,expected", [
+    ('{"subtype": "late"}', {"subtype": "late"}),
+    ('```json\n{"subtype": "late"}\n```', {"subtype": "late"}),
+    ('```\n{"subtype": "late"}\n```', {"subtype": "late"}),
+    ('Here is the result: {"subtype": "late"} done.', {"subtype": "late"}),
+    ('<think>reasoning here</think>\n{"subtype": "late"}', {"subtype": "late"}),
+])
+def test_extract_json_handles_model_output_formats(raw, expected):
+    assert llm._extract_json(raw) == expected
+
+
+def test_extract_json_rejects_non_json():
+    with pytest.raises(json.JSONDecodeError):
+        llm._extract_json("I cannot help with that request.")
+
+
+# ---------------- NIM integration: enabled() ----------------
+def test_enabled_requires_both_ai_mode_and_api_key(monkeypatch):
+    monkeypatch.setattr(settings, "report_ai", "nim")
+    monkeypatch.setattr(settings, "nim_api_key", "")
+    assert not llm.enabled()
+
+    monkeypatch.setattr(settings, "nim_api_key", "key-123")
+    assert llm.enabled()
+
+    monkeypatch.setattr(settings, "report_ai", "rules")
+    assert not llm.enabled()
+
+
+# ---------------- NIM integration: response_format fallback ----------------
+def _nim_status(reply_for):
+    """A fake NIM server that can return non-200 status codes."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status, body = reply_for(request.url.path, json.loads(request.content))
+        return httpx.Response(status, json=body)
+
+    return httpx.MockTransport(handler)
+
+
+async def test_model_retries_without_response_format_on_400(world, model_on):
+    calls = []
+
+    def reply_for(path, body):
+        calls.append({"path": path, "has_rf": "response_format" in body})
+        if body.get("response_format"):
+            return 400, {"error": "response_format is not supported for this model"}
+        return 200, _chat({"subtype": "late", "claimed_delay_min": 10, "mentioned_stop": None,
+                           "extra_checks": [], "severity_hint": "normal"})
+
+    model_on(_nim_status(reply_for))
+    w = await world.running_trip(n_stops=3)
+    student = await _rider(world, w, 0)
+    r = await _report(world, student, "lateness", "bus was 10 min late", w["trip"]["id"])
+    assert r["analysed_by"] == settings.nim_model
+    chat_calls = [c for c in calls if c["path"].endswith("/v1/chat/completions")]
+    assert chat_calls[0]["has_rf"] is True
+    assert chat_calls[1]["has_rf"] is False
+
+
+async def test_model_with_markdown_fenced_json_output(world, model_on):
+    def reply_for(path, body):
+        if "FINDINGS" in body["messages"][1]["content"]:
+            return _chat('```json\n{"summary": "Late bus.", "suggested_action": "Check route.", '
+                         '"draft_reply": "Thank you. The transport office will look into it and get back to you."}\n```')
+        return _chat('```json\n{"subtype": "late", "claimed_delay_min": 15, "mentioned_stop": null, '
+                     '"extra_checks": [], "severity_hint": "normal"}\n```')
+
+    model_on(_nim(reply_for))
+    w = await world.running_trip(n_stops=3)
+    student = await _rider(world, w, 0)
+    r = await _report(world, student, "lateness", "bus was 15 min late", w["trip"]["id"])
+    assert r["analysed_by"] == settings.nim_model
+    assert r["analysis"]["claims"]["claimed_delay_min"] == 15
+
+
+# ---------------- NIM integration: embeddings ----------------
+async def test_embed_returns_none_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "report_ai", "rules")
+    assert await llm.embed("test text") is None
+
+
+async def test_embed_handles_different_vector_dimensions(model_on):
+    vec_2048 = [0.01 * i for i in range(2048)]
+    model_on(_nim(lambda path, body: _embed(vec_2048) if path.endswith("/embeddings") else _chat("{}")))
+    result = await llm.embed("blue water bottle")
+    assert result is not None and len(result) == 2048
+
+
+async def test_embed_falls_back_on_model_error(model_on):
+    def reply_for(path, body):
+        if path.endswith("/embeddings"):
+            raise httpx.ConnectError("connection refused")
+        return _chat("{}")
+
+    model_on(_nim(reply_for))
+    result = await llm.embed("test text")
+    assert result is None
+
+
+# ---------------- Review fixes: /v1 routes, malformed replies, dimension mismatch ----------------
+async def test_requests_keep_the_v1_prefix(model_on):
+    seen = []
+
+    def reply_for(path, body):
+        seen.append(path)
+        return _embed([0.1, 0.2]) if path.endswith("/embeddings") else _chat("{}")
+
+    model_on(_nim(reply_for))
+    await llm.embed("water bottle")
+    assert await llm._chat_json("sys", "user", {}, 50) == {}
+    assert seen == ["/v1/embeddings", "/v1/chat/completions"]
+
+
+async def test_non_text_model_content_is_model_unavailable(model_on):
+    model_on(_nim(lambda path, body: {"choices": [{"message": {"role": "assistant", "content": None}}]}))
+    with pytest.raises(llm.ModelUnavailable):
+        await llm._chat_json("sys", "user", {}, 50)
+
+
+def test_mismatched_embedding_dimensions_are_not_a_match():
+    from app.modules.reports import evidence
+
+    assert evidence._cosine([1.0, 0.0], [1.0, 0.0, 0.0]) == 0.0

@@ -75,7 +75,7 @@ and DEVLOG (history of decisions).
 | history | event timeline, trip & attendance reports | [README](backend/app/modules/history/README.md) | member 5 |
 | dashboard | per-role home aggregates, live board | [README](backend/app/modules/dashboard/README.md) | member 5 |
 | tracking (P1) | live bus position, GPS auto-arrival at stops, "bus is 2 km away" alerts | [README](backend/app/modules/tracking/README.md) | Team B |
-| reports (P1) | student problem reports, an AI agent (local Ollama model) that checks them against trip records and drafts replies, lost and found | [README](backend/app/modules/reports/README.md) | Team B |
+| reports (P1) | student problem reports, an agent (rules by default, optional NVIDIA NIM model) that checks them against trip records and drafts replies, lost and found | [README](backend/app/modules/reports/README.md) | Team B |
 
 Shared code: [backend/app/core](backend/app/core/README.md) · [frontend](frontend/README.md) ·
 [design system](frontend/lib/design/README.md) · [database design](docs/DATABASE.md). How to work in this repo:

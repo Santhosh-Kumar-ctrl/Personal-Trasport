@@ -40,4 +40,14 @@ frontend/android/key.properties
 #MDs
 UI.md
 Review.md
-Claude outputs/
+
+# Terraform
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/tfplan
+infra/tfplan-fix
+*.tfstate
+*.tfstate.*
+tfplan
