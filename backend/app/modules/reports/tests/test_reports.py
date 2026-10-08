@@ -225,8 +225,8 @@ async def test_admin_list_pins_critical_open_reports(world):
 
 
 # ---------------- The model client ----------------
-def _ollama(reply_for):
-    """A fake Ollama server. `reply_for(path, body)` returns the response JSON (or raises)."""
+def _nim(reply_for):
+    """A fake NIM server. `reply_for(path, body)` returns the response JSON (or raises)."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=reply_for(request.url.path, json.loads(request.content)))
@@ -235,31 +235,39 @@ def _ollama(reply_for):
 
 
 def _chat(content) -> dict:
-    return {"message": {"role": "assistant", "content": content if isinstance(content, str) else json.dumps(content)}}
+    """OpenAI-compatible chat response envelope."""
+    text = content if isinstance(content, str) else json.dumps(content)
+    return {"choices": [{"message": {"role": "assistant", "content": text}}]}
+
+
+def _embed(vector: list) -> dict:
+    """OpenAI-compatible embeddings response envelope."""
+    return {"data": [{"embedding": vector}]}
 
 
 @pytest.fixture
 def model_on(monkeypatch):
-    monkeypatch.setattr(settings, "report_ai", "ollama")
+    monkeypatch.setattr(settings, "report_ai", "nim")
+    monkeypatch.setattr(settings, "nim_api_key", "test-key")
     yield lambda transport: monkeypatch.setattr(llm, "transport", transport)
 
 
 async def test_model_reads_and_writes_but_rules_keep_the_severity_floor(world, model_on):
     def reply_for(path, body):
-        if path == "/api/embed":
-            return {"embeddings": [[0.1, 0.2, 0.3]]}
+        if path == "/embeddings":
+            return _embed([0.1, 0.2, 0.3])
         if "FINDINGS" in body["messages"][1]["content"]:
             return _chat({"summary": "Student reports speeding; GPS confirms.", "suggested_action": "Review speeds.",
                           "draft_reply": "Thanks for telling us. We're looking into it."})
         return _chat({"subtype": "speeding", "claimed_delay_min": None, "mentioned_stop": None,
                       "extra_checks": ["crowding"], "severity_hint": "low"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "safety", "driver was rash", w["trip"]["id"])
-    assert r["analysed_by"] == settings.ollama_model
-    assert r["analysis"]["steps"] == {"read": settings.ollama_model, "write": settings.ollama_model}
+    assert r["analysed_by"] == settings.nim_model
+    assert r["analysis"]["steps"] == {"read": settings.nim_model, "write": settings.nim_model}
     assert r["analysis"]["summary"] == "Student reports speeding; GPS confirms."
     assert {f["check"] for f in r["analysis"]["findings"]} >= {"speed", "crowding"}  # model added crowding
     assert r["severity"] == "critical"  # model said low; safety reports can't go below critical
@@ -272,7 +280,7 @@ async def test_rules_correct_a_model_that_misses_a_skipped_stop(world, model_on)
         return _chat({"subtype": "late", "claimed_delay_min": 0, "mentioned_stop": "",
                       "extra_checks": [], "severity_hint": "normal"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=4)
     student = await _rider(world, w, stop_index=1, board=False)
     await world.post(f"/trips/{w['trip']['id']}/stops/3/arrive", who=w["driver"])
@@ -291,7 +299,7 @@ async def test_model_cannot_make_an_ordinary_report_critical(world, model_on):
         return _chat({"subtype": "late", "claimed_delay_min": 45, "mentioned_stop": None,
                       "extra_checks": [], "severity_hint": "critical"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "lateness", "Bus came 45 minutes late, I missed my class!", w["trip"]["id"])
@@ -306,19 +314,19 @@ async def test_draft_with_a_garbled_number_is_replaced_by_the_rules_draft(world,
         return _chat({"subtype": "speeding", "claimed_delay_min": None, "mentioned_stop": None,
                       "extra_checks": [], "severity_hint": "high"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     fixes = [{"latitude": 12.9 + i * 0.01, "longitude": 80.2, "speed_kmph": s} for i, s in enumerate([82, 88])]
     await world.post(f"/trips/{w['trip']['id']}/positions", {"positions": fixes}, who=w["driver"])
     r = await _report(world, student, "safety", "driver was too fast", w["trip"]["id"])
-    assert r["analysis"]["steps"] == {"read": settings.ollama_model, "write": "rules"}
-    assert r["analysed_by"] == f"{settings.ollama_model}+rules"
+    assert r["analysis"]["steps"] == {"read": settings.nim_model, "write": "rules"}
+    assert r["analysed_by"] == f"{settings.nim_model}+rules"
     assert "6:00" not in r["analysis"]["draft_reply"] and "88 km/h" in r["analysis"]["draft_reply"]
 
 
 async def test_bad_model_output_falls_back_to_rules(world, model_on):
-    model_on(_ollama(lambda path, body: _chat("sorry, I can't do JSON")))
+    model_on(_nim(lambda path, body: _chat("sorry, I can't do JSON")))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "lateness", "bus 15 min late", w["trip"]["id"])
@@ -329,7 +337,7 @@ async def test_model_unreachable_falls_back_to_rules(world, model_on):
     def down(path, body):
         raise httpx.ConnectError("connection refused")
 
-    model_on(_ollama(down))
+    model_on(_nim(down))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "overcrowding", "full bus", w["trip"]["id"])
@@ -407,8 +415,8 @@ def test_real_emergencies_are_critical(text):
 
 async def test_model_drafts_that_promise_or_blame_fall_back_to_the_template(world, model_on):
     def reply_for(path, body):
-        if path == "/api/embed":
-            return {"embeddings": [[0.1, 0.2, 0.3]]}
+        if path == "/embeddings":
+            return _embed([0.1, 0.2, 0.3])
         if "FINDINGS" in body["messages"][1]["content"]:
             return _chat({"summary": "Late bus.", "suggested_action": "Check timings.",
                           "draft_reply": "Sorry! The driver was late, which is why you missed class. "
@@ -416,7 +424,7 @@ async def test_model_drafts_that_promise_or_blame_fall_back_to_the_template(worl
         return _chat({"subtype": "late", "claimed_delay_min": None, "mentioned_stop": None,
                       "extra_checks": [], "severity_hint": "normal"})
 
-    model_on(_ollama(reply_for))
+    model_on(_nim(reply_for))
     w = await world.running_trip(n_stops=3)
     student = await _rider(world, w, 0)
     r = await _report(world, student, "lateness", "bus was late", w["trip"]["id"])

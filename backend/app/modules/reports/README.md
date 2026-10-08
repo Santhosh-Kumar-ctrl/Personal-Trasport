@@ -128,11 +128,12 @@ doesn't use the dashboard's forwarding, which also reaches students on the route
 ## Settings
 | Env var | Default | |
 |---|---|---|
-| `REPORT_AI` | `ollama` | `rules` skips the model |
-| `OLLAMA_URL` | `http://localhost:11434` | |
-| `OLLAMA_MODEL` | `qwen3:4b` | any Ollama chat model that supports structured output |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | lost-and-found matching |
-| `OLLAMA_TIMEOUT_SECONDS` | `120` | the first call after a while also loads the model |
+| `REPORT_AI` | `nim` | `rules` skips the model; NIM unreachable also falls back to rules |
+| `NIM_API_KEY` | _(required in production)_ | injected from AWS Secrets Manager |
+| `NIM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | |
+| `NIM_MODEL` | `nvidia/llama-3.1-nemotron-70b-instruct` | |
+| `NIM_EMBED_MODEL` | `nvidia/nv-embedqa-mistral-7b-v2` | lost-and-found matching |
+| `NIM_TIMEOUT_SECONDS` | `30` | |
 | `REPORT_SPEED_LIMIT_KMPH` | `60` | |
 | `REPORT_LOOKBACK_DAYS` | `3` | |
 

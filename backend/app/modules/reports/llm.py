@@ -1,9 +1,9 @@
 """The language-model steps of the report agent, with rule-based fallbacks.
 
-The model (a small local one through Ollama) only reads the student's text and writes prose.
-Every fact comes from `evidence.py`. Anything that goes wrong here (Ollama not running, a
-timeout, output that doesn't match the schema) falls back to the rules below, so a report is
-always analysed.
+Calls NVIDIA NIM (OpenAI-compatible API) to read the student's text and write prose.
+Every fact comes from `evidence.py`. Anything that goes wrong here (NIM unreachable,
+timeout, output that doesn't match the schema) falls back to the rules below, so a
+report is always analysed.
 """
 
 import json
@@ -30,35 +30,32 @@ class ModelUnavailable(Exception):
 
 
 def enabled() -> bool:
-    return settings.report_ai == "ollama"
+    return settings.report_ai == "nim" and bool(settings.nim_api_key)
 
 
-async def _post(path: str, body: dict) -> dict:
-    try:
-        async with httpx.AsyncClient(base_url=settings.ollama_url, timeout=settings.ollama_timeout_seconds,
-                                     transport=transport) as client:
-            r = await client.post(path, json=body)
-            r.raise_for_status()
-            return r.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise ModelUnavailable(f"{path}: {type(exc).__name__} {exc}") from exc
+def _headers() -> dict:
+    return {"Authorization": f"Bearer {settings.nim_api_key}", "Content-Type": "application/json"}
 
 
 async def _chat_json(system: str, user: str, schema: dict, max_tokens: int) -> dict:
     body = {
-        "model": settings.ollama_model,
+        "model": settings.nim_model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "format": schema,  # Ollama constrains the output to this JSON schema
+        "response_format": {"type": "json_object"},
+        "temperature": 0,
+        "max_tokens": max_tokens,
         "stream": False,
-        "think": False,  # qwen3: answer directly, no reasoning tokens
-        # The output cap stops a small model that gets stuck repeating itself: it then returns
-        # unfinished JSON within seconds (falls back to rules) instead of running to the timeout.
-        "options": {"temperature": 0, "num_predict": max_tokens},
-        "keep_alive": "30m",  # stay loaded between reports; loading takes up to a minute
     }
-    data = await _post("/api/chat", body)
     try:
-        return json.loads(data["message"]["content"])
+        async with httpx.AsyncClient(base_url=settings.nim_base_url,
+                                     timeout=settings.nim_timeout_seconds,
+                                     transport=transport) as client:
+            r = await client.post("/chat/completions", json=body, headers=_headers())
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"]
+            return json.loads(content)
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ModelUnavailable(f"chat: {type(exc).__name__} {exc}") from exc
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ModelUnavailable(f"unreadable reply: {exc}") from exc
 
@@ -67,10 +64,15 @@ async def embed(text: str) -> list[float] | None:
     """Embedding for lost-and-found matching, or None when the model is off or unavailable."""
     if not enabled():
         return None
+    body = {"model": settings.nim_embed_model, "input": text, "encoding_format": "float"}
     try:
-        data = await _post("/api/embed", {"model": settings.ollama_embed_model, "input": text})
-        return [float(x) for x in data["embeddings"][0]]
-    except (ModelUnavailable, KeyError, IndexError, TypeError, ValueError) as exc:
+        async with httpx.AsyncClient(base_url=settings.nim_base_url,
+                                     timeout=settings.nim_timeout_seconds,
+                                     transport=transport) as client:
+            r = await client.post("/embeddings", json=body, headers=_headers())
+            r.raise_for_status()
+            return [float(x) for x in r.json()["data"][0]["embedding"]]
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
         log.warning("Embedding unavailable: %s", exc)
         return None
 
@@ -126,7 +128,7 @@ async def read_claims(kind: ReportKind, text: str) -> tuple[Claims, str]:
                 claims.claimed_delay_min = None
             if not (claims.mentioned_stop or "").strip():
                 claims.mentioned_stop = None
-            return merge_with_rules(claims, rules_claims(kind, text), kind), settings.ollama_model
+            return merge_with_rules(claims, rules_claims(kind, text), kind), settings.nim_model
         except (ModelUnavailable, ValidationError) as exc:
             log.warning("Report read fell back to rules: %s", exc)
     return rules_claims(kind, text), RULES
@@ -274,7 +276,7 @@ async def write_up(kind: ReportKind, text: str, claims: Claims, findings: list[F
             elif broken:
                 log.warning("Report draft reply broke the reply rules %s; using rules", broken)
             elif w.summary and w.draft_reply:
-                return w, settings.ollama_model
+                return w, settings.nim_model
         except (ModelUnavailable, ValidationError, KeyError, TypeError) as exc:
             log.warning("Report write-up fell back to rules: %s", exc)
     return rules_writeup(kind, claims, findings), RULES
