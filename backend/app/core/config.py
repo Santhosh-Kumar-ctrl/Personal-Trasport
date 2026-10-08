@@ -62,9 +62,12 @@ class Settings(BaseSettings):
     report_ai: str = "rules"  # rules (default, local) | nim (sends report text to NIM_BASE_URL)
     nim_api_key: str = ""  # set via NIM_API_KEY env var
     nim_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nim_model: str = "meta/llama-3.1-70b-instruct"
-    nim_embed_model: str = "nvidia/llama-3.2-nv-embedqa-1b-v2"
+    nim_model: str = "nvidia/nemotron-3-super-120b-a12b"
+    nim_embed_model: str = "nvidia/nemotron-3-embed-1b"
     nim_timeout_seconds: float = 30
+    # Ask for response_format=json_object. Off by default: Nemotron 3 returns broken JSON in that
+    # mode but valid JSON when prompted for it. Turn on for models that need it.
+    nim_json_mode: bool = False
     report_speed_limit_kmph: int = 60  # GPS readings above this support an unsafe-driving report
     report_lookback_days: int = 3  # trips a report can be about; found items a lost item can match
 

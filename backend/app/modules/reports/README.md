@@ -139,9 +139,10 @@ the text. Turn NIM on only if students are told their report text is processed b
 | `REPORT_AI` | `rules` | `rules` keeps everything local. `nim` sends report text to the NIM endpoint (see Data sent to NIM); if NIM is unreachable it falls back to rules |
 | `NIM_API_KEY` | _(empty)_ | required when `REPORT_AI=nim`; injected from AWS Secrets Manager |
 | `NIM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | |
-| `NIM_MODEL` | `meta/llama-3.1-70b-instruct` | |
-| `NIM_EMBED_MODEL` | `nvidia/llama-3.2-nv-embedqa-1b-v2` | lost-and-found matching; found items embedded with another model are matched by word overlap |
+| `NIM_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | |
+| `NIM_EMBED_MODEL` | `nvidia/nemotron-3-embed-1b` | lost-and-found matching; found items embedded with another model are matched by word overlap |
 | `NIM_TIMEOUT_SECONDS` | `30` | |
+| `NIM_JSON_MODE` | `false` | send `response_format=json_object`; off because Nemotron 3 returns broken JSON in that mode. Thinking is always turned off (`enable_thinking: false`) so replies fit `max_tokens` |
 | `REPORT_SPEED_LIMIT_KMPH` | `60` | |
 | `REPORT_LOOKBACK_DAYS` | `3` | |
 

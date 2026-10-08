@@ -38,24 +38,34 @@ def _headers() -> dict:
 
 
 async def _chat_json(system: str, user: str, schema: dict, max_tokens: int) -> dict:
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    plain_system = system + "\nRespond ONLY with valid JSON."
+    messages = [{"role": "system", "content": system if settings.nim_json_mode else plain_system},
+                {"role": "user", "content": user}]
     body: dict = {
         "model": settings.nim_model,
         "messages": messages,
-        "response_format": {"type": "json_object"},
         "temperature": 0,
         "max_tokens": max_tokens,
         "stream": False,
+        # Reasoning models (Nemotron 3) otherwise spend max_tokens thinking and return cut-off
+        # or empty JSON. Models without a thinking mode ignore it.
+        "chat_template_kwargs": {"enable_thinking": False},
     }
+    if settings.nim_json_mode:
+        body["response_format"] = {"type": "json_object"}
     try:
         async with httpx.AsyncClient(base_url=settings.nim_base_url,
                                      timeout=settings.nim_timeout_seconds,
                                      transport=transport) as client:
             r = await client.post("chat/completions", json=body, headers=_headers())
+            if r.status_code == 400 and "chat_template_kwargs" in r.text:
+                log.warning("Model rejected chat_template_kwargs; retrying without it")
+                body.pop("chat_template_kwargs")
+                r = await client.post("chat/completions", json=body, headers=_headers())
             if r.status_code == 400 and "response_format" in r.text:
                 log.warning("Model rejected response_format; retrying without it")
                 body.pop("response_format")
-                messages[0] = {"role": "system", "content": system + "\nRespond ONLY with valid JSON."}
+                messages[0] = {"role": "system", "content": plain_system}
                 r = await client.post("chat/completions", json=body, headers=_headers())
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"]

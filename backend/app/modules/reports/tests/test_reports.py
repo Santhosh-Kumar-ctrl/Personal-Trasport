@@ -497,13 +497,17 @@ def _nim_status(reply_for):
     return httpx.MockTransport(handler)
 
 
-async def test_model_retries_without_response_format_on_400(world, model_on):
+async def test_model_retries_without_response_format_on_400(world, model_on, monkeypatch):
+    monkeypatch.setattr(settings, "nim_json_mode", True)
     calls = []
 
     def reply_for(path, body):
         calls.append({"path": path, "has_rf": "response_format" in body})
         if body.get("response_format"):
             return 400, {"error": "response_format is not supported for this model"}
+        if "FINDINGS" in body["messages"][1]["content"]:
+            return 200, _chat({"summary": "Late bus.", "suggested_action": "Check route.",
+                               "draft_reply": "Thank you. The transport office will look into it and get back to you."})
         return 200, _chat({"subtype": "late", "claimed_delay_min": 10, "mentioned_stop": None,
                            "extra_checks": [], "severity_hint": "normal"})
 
@@ -515,6 +519,29 @@ async def test_model_retries_without_response_format_on_400(world, model_on):
     chat_calls = [c for c in calls if c["path"].endswith("/v1/chat/completions")]
     assert chat_calls[0]["has_rf"] is True
     assert chat_calls[1]["has_rf"] is False
+
+
+async def test_model_retries_without_chat_template_kwargs_on_400(world, model_on):
+    calls = []
+
+    def reply_for(path, body):
+        calls.append({"path": path, "has_kwargs": "chat_template_kwargs" in body})
+        if body.get("chat_template_kwargs"):
+            return 400, {"error": "unexpected field chat_template_kwargs"}
+        if "FINDINGS" in body["messages"][1]["content"]:
+            return 200, _chat({"summary": "Late bus.", "suggested_action": "Check route.",
+                               "draft_reply": "Thank you. The transport office will look into it and get back to you."})
+        return 200, _chat({"subtype": "late", "claimed_delay_min": 10, "mentioned_stop": None,
+                           "extra_checks": [], "severity_hint": "normal"})
+
+    model_on(_nim_status(reply_for))
+    w = await world.running_trip(n_stops=3)
+    student = await _rider(world, w, 0)
+    r = await _report(world, student, "lateness", "bus was 10 min late", w["trip"]["id"])
+    assert r["analysed_by"] == settings.nim_model
+    chat_calls = [c for c in calls if c["path"].endswith("/v1/chat/completions")]
+    assert chat_calls[0]["has_kwargs"] is True
+    assert chat_calls[1]["has_kwargs"] is False
 
 
 async def test_model_with_markdown_fenced_json_output(world, model_on):
