@@ -64,8 +64,6 @@ resource "aws_iam_user_policy" "deployer" {
         Sid    = "ECSListAndPassRole"
         Effect = "Allow"
         Action = [
-          "ecs:ListServices",
-          "ecs:ListClusters",
           "iam:PassRole",
         ]
         Resource = [
@@ -73,6 +71,12 @@ resource "aws_iam_user_policy" "deployer" {
           aws_iam_role.ecs_task.arn,
           "arn:aws:ecs:${var.region}:*:*",
         ]
+      },
+      {
+        Sid      = "ECSList"
+        Effect   = "Allow"
+        Action   = ["ecs:ListServices", "ecs:ListClusters"]
+        Resource = "*"
       },
       {
         Sid    = "Logs"

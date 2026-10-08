@@ -1,0 +1,13 @@
+# Terraform state holds secret values (database password, JWT secret, NIM key) in plain text.
+# Keep it in an encrypted, access-restricted remote backend, never in a local terraform.tfstate.
+# To use: copy to backend.tf, create the bucket first (versioning on, public access blocked,
+# SSE enabled, access limited to the deployer), then run `terraform init -migrate-state`.
+terraform {
+  backend "s3" {
+    bucket       = "REPLACE-with-your-state-bucket"
+    key          = "bus-tracking/terraform.tfstate"
+    region       = "ap-south-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+}

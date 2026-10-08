@@ -39,11 +39,13 @@ resource "aws_secretsmanager_secret_version" "database_url" {
 }
 
 resource "aws_secretsmanager_secret" "nim_api_key" {
+  count                   = var.report_ai == "nim" ? 1 : 0
   name                    = "${var.project}/nim-api-key"
   recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret_version" "nim_api_key" {
-  secret_id     = aws_secretsmanager_secret.nim_api_key.id
+  count         = var.report_ai == "nim" ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.nim_api_key[0].id
   secret_string = var.nim_api_key
 }

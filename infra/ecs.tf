@@ -31,12 +31,11 @@ resource "aws_iam_role_policy" "ecs_secrets" {
     Statement = [{
       Effect = "Allow"
       Action = ["secretsmanager:GetSecretValue"]
-      Resource = [
+      Resource = concat([
         aws_secretsmanager_secret.db_password.arn,
         aws_secretsmanager_secret.jwt_secret.arn,
         aws_secretsmanager_secret.database_url.arn,
-        aws_secretsmanager_secret.nim_api_key.arn,
-      ]
+      ], aws_secretsmanager_secret.nim_api_key[*].arn)
     }]
   })
 }
@@ -96,16 +95,22 @@ resource "aws_ecs_task_definition" "api" {
     portMappings = [{ containerPort = 8000, protocol = "tcp" }]
     environment = [
       { name = "ENVIRONMENT", value = "production" },
-      { name = "CORS_ORIGINS", value = "http://${aws_lb.main.dns_name},http://${aws_s3_bucket_website_configuration.frontend.website_endpoint}" },
+      { name = "CORS_ORIGINS", value = "${local.https_enabled ? "https" : "http"}://${aws_lb.main.dns_name},http://${aws_s3_bucket_website_configuration.frontend.website_endpoint}" },
       { name = "ALLOW_SIMULATION", value = "false" },
       { name = "TIMEZONE", value = "Asia/Kolkata" },
-      { name = "REPORT_AI", value = "nim" },
+      { name = "REPORT_AI", value = var.report_ai },
+      # Changes whenever a secret value is rotated, which makes a new task definition revision
+      # and rolls the service so running tasks pick up the new secrets.
+      { name = "SECRETS_REVISION", value = substr(sha256(join(",", concat([
+        aws_secretsmanager_secret_version.db_password.version_id,
+        aws_secretsmanager_secret_version.jwt_secret.version_id,
+        aws_secretsmanager_secret_version.database_url.version_id,
+      ], aws_secretsmanager_secret_version.nim_api_key[*].version_id))), 0, 16) },
     ]
-    secrets = [
+    secrets = concat([
       { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url.arn },
       { name = "JWT_SECRET", valueFrom = aws_secretsmanager_secret.jwt_secret.arn },
-      { name = "NIM_API_KEY", valueFrom = aws_secretsmanager_secret.nim_api_key.arn },
-    ]
+    ], [for s in aws_secretsmanager_secret.nim_api_key : { name = "NIM_API_KEY", valueFrom = s.arn }])
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -146,5 +151,5 @@ resource "aws_ecs_service" "api" {
     container_port   = 8000
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.http, aws_lb_listener.https]
 }
