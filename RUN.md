@@ -149,21 +149,17 @@ Run `python -m scripts.simulate_bus --help` for the full list.
 ## 5. Student reports and the AI agent
 Students report problems (late or skipped stop, overcrowding, safety, lost item). An agent checks
 each report against the trip records, sets its urgency and drafts a reply. Admins review it on
-the **Issues** screen. The agent runs on a **local model through Ollama**, so nothing leaves your
-laptop.
+the **Issues** screen. By default the agent uses **keyword rules and templates**, so
+nothing leaves your laptop. Optionally it can use a model on NVIDIA NIM (see below); that sends
+the text of each report (and found-item descriptions) to the NIM endpoint.
 
-### One-time setup
-1. Install Ollama from https://ollama.com and start it (it runs in the system tray).
-2. Download the two models (about 3 GB):
-   ```powershell
-   ollama pull qwen3:4b
-   ollama pull nomic-embed-text
-   ```
-3. Add the settings from `.env.example` (the `REPORT_AI` and `OLLAMA_*` lines) to `backend/.env`,
-   or leave them out to use the defaults.
+### Optional: model-written analysis (NVIDIA NIM)
+1. Get an API key from https://build.nvidia.com.
+2. Set `REPORT_AI=nim` and `NIM_API_KEY=...` in `backend/.env` (see `.env.example`). Report text
+   is then sent to NVIDIA's hosted API. Do this only if students are told about it.
 
-Without Ollama everything still works: reports are checked with keyword rules and templates, and
-the admin screen says "Written by the rule-based checker". Set `REPORT_AI=rules` to force that.
+With the default `REPORT_AI=rules`, reports are checked with keyword rules and templates, and
+the admin screen says "Written by the rule-based checker".
 
 ### Check it end to end (no app needed)
 With the API running (step 2):
@@ -244,6 +240,6 @@ your location.
 | Simulator exits with `409 ... already_running` | Another trip for this driver or bus is still running today: log in as that driver and end it from the run screen, or as admin call `POST /trips/{id}/end` from http://localhost:8000/docs |
 | Student sees no alert | Check you're logged in as a student on the simulated route, waiting at a stop after the first one, and not boarded |
 | Driver strip shows **Blocked** or **Location off** | Tap the button on the strip to open the phone's settings |
-| Reports stay "Checking the bus records…" | The model is loading (up to a minute the first time). If it never finishes, check Ollama is running: http://localhost:11434 should say "Ollama is running" |
-| Admin screen says "rule-based checker" | Ollama wasn't reachable, or `REPORT_AI=rules`. Start Ollama and press **Check again** on the report |
+| Reports stay "Checking the bus records…" | The model call is slow (up to its timeout). If it never finishes, check `REPORT_AI=nim` is set and `NIM_API_KEY` is valid |
+| Admin screen says "rule-based checker" | `REPORT_AI=rules` (the default), or NIM was unreachable. Check the NIM settings and press **Check again** on the report |
 | Map tiles don't load | The public OpenStreetMap server may be rate-limiting; set `--dart-define=TILE_URL=...` to another provider |

@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     # Student reports: the triage agent calls NVIDIA NIM (OpenAI-compatible).
     # "rules" skips the model (keyword rules and templates; tests use it).
     # NIM being unreachable falls back to rules automatically.
-    report_ai: str = "nim"  # nim | rules
+    report_ai: str = "rules"  # rules (default, local) | nim (sends report text to NIM_BASE_URL)
     nim_api_key: str = ""  # set via NIM_API_KEY env var
     nim_base_url: str = "https://integrate.api.nvidia.com/v1"
     nim_model: str = "meta/llama-3.1-70b-instruct"

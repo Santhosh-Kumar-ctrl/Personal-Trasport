@@ -249,12 +249,13 @@ def _embed(vector: list) -> dict:
 def model_on(monkeypatch):
     monkeypatch.setattr(settings, "report_ai", "nim")
     monkeypatch.setattr(settings, "nim_api_key", "test-key")
+    monkeypatch.setattr(settings, "nim_base_url", "https://nim.test/v1")
     yield lambda transport: monkeypatch.setattr(llm, "transport", transport)
 
 
 async def test_model_reads_and_writes_but_rules_keep_the_severity_floor(world, model_on):
     def reply_for(path, body):
-        if path == "/embeddings":
+        if path.endswith("/embeddings"):
             return _embed([0.1, 0.2, 0.3])
         if "FINDINGS" in body["messages"][1]["content"]:
             return _chat({"summary": "Student reports speeding; GPS confirms.", "suggested_action": "Review speeds.",
@@ -415,7 +416,7 @@ def test_real_emergencies_are_critical(text):
 
 async def test_model_drafts_that_promise_or_blame_fall_back_to_the_template(world, model_on):
     def reply_for(path, body):
-        if path == "/embeddings":
+        if path.endswith("/embeddings"):
             return _embed([0.1, 0.2, 0.3])
         if "FINDINGS" in body["messages"][1]["content"]:
             return _chat({"summary": "Late bus.", "suggested_action": "Check timings.",
@@ -511,7 +512,7 @@ async def test_model_retries_without_response_format_on_400(world, model_on):
     student = await _rider(world, w, 0)
     r = await _report(world, student, "lateness", "bus was 10 min late", w["trip"]["id"])
     assert r["analysed_by"] == settings.nim_model
-    chat_calls = [c for c in calls if c["path"] == "/chat/completions"]
+    chat_calls = [c for c in calls if c["path"].endswith("/v1/chat/completions")]
     assert chat_calls[0]["has_rf"] is True
     assert chat_calls[1]["has_rf"] is False
 
@@ -540,17 +541,43 @@ async def test_embed_returns_none_when_disabled(monkeypatch):
 
 async def test_embed_handles_different_vector_dimensions(model_on):
     vec_2048 = [0.01 * i for i in range(2048)]
-    model_on(_nim(lambda path, body: _embed(vec_2048) if path == "/embeddings" else _chat("{}")))
+    model_on(_nim(lambda path, body: _embed(vec_2048) if path.endswith("/embeddings") else _chat("{}")))
     result = await llm.embed("blue water bottle")
     assert result is not None and len(result) == 2048
 
 
 async def test_embed_falls_back_on_model_error(model_on):
     def reply_for(path, body):
-        if path == "/embeddings":
+        if path.endswith("/embeddings"):
             raise httpx.ConnectError("connection refused")
         return _chat("{}")
 
     model_on(_nim(reply_for))
     result = await llm.embed("test text")
     assert result is None
+
+
+# ---------------- Review fixes: /v1 routes, malformed replies, dimension mismatch ----------------
+async def test_requests_keep_the_v1_prefix(model_on):
+    seen = []
+
+    def reply_for(path, body):
+        seen.append(path)
+        return _embed([0.1, 0.2]) if path.endswith("/embeddings") else _chat("{}")
+
+    model_on(_nim(reply_for))
+    await llm.embed("water bottle")
+    assert await llm._chat_json("sys", "user", {}, 50) == {}
+    assert seen == ["/v1/embeddings", "/v1/chat/completions"]
+
+
+async def test_non_text_model_content_is_model_unavailable(model_on):
+    model_on(_nim(lambda path, body: {"choices": [{"message": {"role": "assistant", "content": None}}]}))
+    with pytest.raises(llm.ModelUnavailable):
+        await llm._chat_json("sys", "user", {}, 50)
+
+
+def test_mismatched_embedding_dimensions_are_not_a_match():
+    from app.modules.reports import evidence
+
+    assert evidence._cosine([1.0, 0.0], [1.0, 0.0, 0.0]) == 0.0

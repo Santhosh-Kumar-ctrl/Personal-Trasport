@@ -37,6 +37,19 @@ resource "aws_s3_bucket_policy" "frontend" {
   })
 }
 
+# Placeholder so frontend_url never returns a bare S3 error before the first deploy.
+# scripts/deploy-frontend.sh replaces it with the real Flutter build.
+resource "aws_s3_object" "placeholder" {
+  bucket       = aws_s3_bucket.frontend.id
+  key          = "index.html"
+  content_type = "text/html"
+  content      = "<!doctype html><title>Transit</title><p>Frontend not deployed yet. Run infra/scripts/deploy-frontend.sh.</p>"
+
+  lifecycle {
+    ignore_changes = [content, etag, source_hash, content_type]
+  }
+}
+
 data "aws_caller_identity" "current" {}
 
 output "frontend_url" {

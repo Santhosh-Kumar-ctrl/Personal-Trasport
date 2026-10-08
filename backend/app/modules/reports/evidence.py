@@ -253,7 +253,7 @@ async def lost_item_candidates(session: AsyncSession, report: Report, trip: Trip
     report_words = _words(report.description)
     scored = []
     for item in items:
-        if report_vec and item.embedding:
+        if report_vec and item.embedding and len(report_vec) == len(item.embedding):
             score = _cosine(report_vec, item.embedding)
             ok = score >= EMBED_MIN
         else:

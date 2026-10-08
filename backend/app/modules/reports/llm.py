@@ -1,6 +1,6 @@
 """The language-model steps of the report agent, with rule-based fallbacks.
 
-Calls NVIDIA NIM (OpenAI-compatible API) to read the student's text and write prose.
+Calls NVIDIA NIM (OpenAI-compatible API, hosted at NIM_BASE_URL) to read the student's text and write prose.
 Every fact comes from `evidence.py`. Anything that goes wrong here (NIM unreachable,
 timeout, output that doesn't match the schema) falls back to the rules below, so a
 report is always analysed.
@@ -51,14 +51,16 @@ async def _chat_json(system: str, user: str, schema: dict, max_tokens: int) -> d
         async with httpx.AsyncClient(base_url=settings.nim_base_url,
                                      timeout=settings.nim_timeout_seconds,
                                      transport=transport) as client:
-            r = await client.post("/chat/completions", json=body, headers=_headers())
+            r = await client.post("chat/completions", json=body, headers=_headers())
             if r.status_code == 400 and "response_format" in r.text:
                 log.warning("Model rejected response_format; retrying without it")
                 body.pop("response_format")
                 messages[0] = {"role": "system", "content": system + "\nRespond ONLY with valid JSON."}
-                r = await client.post("/chat/completions", json=body, headers=_headers())
+                r = await client.post("chat/completions", json=body, headers=_headers())
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"]
+            if not isinstance(content, str):
+                raise ModelUnavailable(f"unreadable reply: content is {type(content).__name__}")
             return _extract_json(content)
     except (httpx.HTTPError, ValueError) as exc:
         raise ModelUnavailable(f"chat: {type(exc).__name__} {exc}") from exc
@@ -91,7 +93,7 @@ async def embed(text: str) -> list[float] | None:
         async with httpx.AsyncClient(base_url=settings.nim_base_url,
                                      timeout=settings.nim_timeout_seconds,
                                      transport=transport) as client:
-            r = await client.post("/embeddings", json=body, headers=_headers())
+            r = await client.post("embeddings", json=body, headers=_headers())
             r.raise_for_status()
             return [float(x) for x in r.json()["data"][0]["embedding"]]
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:

@@ -13,6 +13,11 @@ output "db_endpoint" {
   description = "RDS PostgreSQL endpoint (internal)"
 }
 
+output "frontend_deploy_command" {
+  value       = "infra/scripts/deploy-frontend.sh ${aws_s3_bucket.frontend.id} http://${aws_lb.main.dns_name}"
+  description = "Builds the Flutter web app and syncs it to the frontend bucket"
+}
+
 output "deploy_commands" {
   value = <<-EOT
     # 1. Build and push the Docker image:
