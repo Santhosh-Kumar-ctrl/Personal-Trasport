@@ -38,9 +38,10 @@ def _headers() -> dict:
 
 
 async def _chat_json(system: str, user: str, schema: dict, max_tokens: int) -> dict:
-    body = {
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    body: dict = {
         "model": settings.nim_model,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "messages": messages,
         "response_format": {"type": "json_object"},
         "temperature": 0,
         "max_tokens": max_tokens,
@@ -51,13 +52,34 @@ async def _chat_json(system: str, user: str, schema: dict, max_tokens: int) -> d
                                      timeout=settings.nim_timeout_seconds,
                                      transport=transport) as client:
             r = await client.post("/chat/completions", json=body, headers=_headers())
+            if r.status_code == 400 and "response_format" in r.text:
+                log.warning("Model rejected response_format; retrying without it")
+                body.pop("response_format")
+                messages[0] = {"role": "system", "content": system + "\nRespond ONLY with valid JSON."}
+                r = await client.post("/chat/completions", json=body, headers=_headers())
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"]
-            return json.loads(content)
+            return _extract_json(content)
     except (httpx.HTTPError, ValueError) as exc:
         raise ModelUnavailable(f"chat: {type(exc).__name__} {exc}") from exc
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ModelUnavailable(f"unreadable reply: {exc}") from exc
+
+
+_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+
+
+def _extract_json(text: str) -> dict:
+    """Parse JSON from model output, handling markdown fences and thinking tags."""
+    text = text.strip()
+    if m := _JSON_BLOCK.search(text):
+        text = m.group(1)
+    elif not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end > start:
+            text = text[start:end + 1]
+    return json.loads(text)
 
 
 async def embed(text: str) -> list[float] | None:

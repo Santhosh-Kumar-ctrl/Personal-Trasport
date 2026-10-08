@@ -453,3 +453,104 @@ async def test_students_cant_flood_reports(world):
         await world.post("/reports", {"kind": "other", "description": "bus smells bad"}, who=student, expect=201)
     r = await world.post("/reports", {"kind": "other", "description": "bus smells bad"}, who=student, expect=429)
     assert r.json()["code"] == "rate_limited"
+
+
+# ---------------- NIM integration: JSON extraction ----------------
+@pytest.mark.parametrize("raw,expected", [
+    ('{"subtype": "late"}', {"subtype": "late"}),
+    ('```json\n{"subtype": "late"}\n```', {"subtype": "late"}),
+    ('```\n{"subtype": "late"}\n```', {"subtype": "late"}),
+    ('Here is the result: {"subtype": "late"} done.', {"subtype": "late"}),
+    ('<think>reasoning here</think>\n{"subtype": "late"}', {"subtype": "late"}),
+])
+def test_extract_json_handles_model_output_formats(raw, expected):
+    assert llm._extract_json(raw) == expected
+
+
+def test_extract_json_rejects_non_json():
+    with pytest.raises(json.JSONDecodeError):
+        llm._extract_json("I cannot help with that request.")
+
+
+# ---------------- NIM integration: enabled() ----------------
+def test_enabled_requires_both_ai_mode_and_api_key(monkeypatch):
+    monkeypatch.setattr(settings, "report_ai", "nim")
+    monkeypatch.setattr(settings, "nim_api_key", "")
+    assert not llm.enabled()
+
+    monkeypatch.setattr(settings, "nim_api_key", "key-123")
+    assert llm.enabled()
+
+    monkeypatch.setattr(settings, "report_ai", "rules")
+    assert not llm.enabled()
+
+
+# ---------------- NIM integration: response_format fallback ----------------
+def _nim_status(reply_for):
+    """A fake NIM server that can return non-200 status codes."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status, body = reply_for(request.url.path, json.loads(request.content))
+        return httpx.Response(status, json=body)
+
+    return httpx.MockTransport(handler)
+
+
+async def test_model_retries_without_response_format_on_400(world, model_on):
+    calls = []
+
+    def reply_for(path, body):
+        calls.append({"path": path, "has_rf": "response_format" in body})
+        if body.get("response_format"):
+            return 400, {"error": "response_format is not supported for this model"}
+        return 200, _chat({"subtype": "late", "claimed_delay_min": 10, "mentioned_stop": None,
+                           "extra_checks": [], "severity_hint": "normal"})
+
+    model_on(_nim_status(reply_for))
+    w = await world.running_trip(n_stops=3)
+    student = await _rider(world, w, 0)
+    r = await _report(world, student, "lateness", "bus was 10 min late", w["trip"]["id"])
+    assert r["analysed_by"] == settings.nim_model
+    chat_calls = [c for c in calls if c["path"] == "/chat/completions"]
+    assert chat_calls[0]["has_rf"] is True
+    assert chat_calls[1]["has_rf"] is False
+
+
+async def test_model_with_markdown_fenced_json_output(world, model_on):
+    def reply_for(path, body):
+        if "FINDINGS" in body["messages"][1]["content"]:
+            return _chat('```json\n{"summary": "Late bus.", "suggested_action": "Check route.", '
+                         '"draft_reply": "Thank you. The transport office will look into it and get back to you."}\n```')
+        return _chat('```json\n{"subtype": "late", "claimed_delay_min": 15, "mentioned_stop": null, '
+                     '"extra_checks": [], "severity_hint": "normal"}\n```')
+
+    model_on(_nim(reply_for))
+    w = await world.running_trip(n_stops=3)
+    student = await _rider(world, w, 0)
+    r = await _report(world, student, "lateness", "bus was 15 min late", w["trip"]["id"])
+    assert r["analysed_by"] == settings.nim_model
+    assert r["analysis"]["claims"]["claimed_delay_min"] == 15
+
+
+# ---------------- NIM integration: embeddings ----------------
+async def test_embed_returns_none_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "report_ai", "rules")
+    assert await llm.embed("test text") is None
+
+
+async def test_embed_handles_different_vector_dimensions(model_on):
+    vec_2048 = [0.01 * i for i in range(2048)]
+    model_on(_nim(lambda path, body: _embed(vec_2048) if path == "/embeddings" else _chat("{}")))
+    result = await llm.embed("blue water bottle")
+    assert result is not None and len(result) == 2048
+
+
+async def test_embed_falls_back_on_model_error(model_on):
+    def reply_for(path, body):
+        if path == "/embeddings":
+            raise httpx.ConnectError("connection refused")
+        return _chat("{}")
+
+    model_on(_nim(reply_for))
+    result = await llm.embed("test text")
+    assert result is None

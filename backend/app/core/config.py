@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     report_ai: str = "nim"  # nim | rules
     nim_api_key: str = ""  # set via NIM_API_KEY env var
     nim_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nim_model: str = "nvidia/llama-3.1-nemotron-70b-instruct"
-    nim_embed_model: str = "nvidia/nv-embedqa-mistral-7b-v2"
+    nim_model: str = "meta/llama-3.1-70b-instruct"
+    nim_embed_model: str = "nvidia/llama-3.2-nv-embedqa-1b-v2"
     nim_timeout_seconds: float = 30
     report_speed_limit_kmph: int = 60  # GPS readings above this support an unsafe-driving report
     report_lookback_days: int = 3  # trips a report can be about; found items a lost item can match
